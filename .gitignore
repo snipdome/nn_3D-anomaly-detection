@@ -1,0 +1,12 @@
+checkpoints
+__pycache__
+logs
+lightning_logs
+config_files
+*/__pycache__
+wandb
+*.sh
+*.txt
+*.npy
+.vscode/launch.json
+etc/out*

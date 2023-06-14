@@ -1,0 +1,106 @@
+project: example
+seed: 1
+version: 1
+wandb:
+  args:
+    reinit: True
+  watch:
+    log: null
+dataloader:   
+  name: VolumetricDataLoader
+  file_format: tif
+  is_distributed: False
+  num_workers: 8
+  patch_size: 64 # or a 3-tuple for non-isotropic patches
+  training:
+    batch_size: 2 
+    patches_per_volume: 2        # number of patches sampled per volume/subject
+    queue_length: 2              # how many patches of subjects to keep in memory at a time. The number of total patches is defined by patches_per_volume multiplied by the number of subjects in the dataset
+    sampling: sampling_likelihood # or 'uniform' for uniform sampling, 'label' for using the the 'label' volumes as sampling likelihood, 'sampling_likelihood' for using the sampling likelihood
+    data_augm_v: 4
+    dataset:
+      path:                /data/example/trainset/image
+      label:               /data/example/trainset/label
+      sampling_likelihood: /data/example/trainset/sampling_likelihood # can be removed if 'uniform' or 'label' sampling is used
+  validation:
+    batch_size: 2
+    patches_per_volume: 2
+    queue_length: 2
+    sampling: sampling_likelihood
+    dataset:
+      path:                /data/example/valset/image
+      label:               /data/example/valset/label
+      sampling_likelihood: /data/example/valset/sampling_likelihood 
+  test_and_predict:
+    batch_size: 2
+    patch_overlap: 32
+    dataset:
+      path:    /data/example/test/image
+      label:   /data/example/test/label
+      results: /data/example/test/predictions
+  test: # can be deleted if no post-processing is used
+    post_processing:
+      module: nn.utils.utils
+      fun: suppress_borders_and_outside_with_optimization_torch_hook
+      pars: [ 2.4328547425, 5.98152321]
+      forward_arrays:  [y_hat, rec_error]
+      forward_devices: [cuda:1, cuda:1]
+  predict:
+    post_processing:
+      module: nn.utils.utils
+      fun: suppress_borders_and_outside_with_optimization_torch_hook
+      pars: [ 2.4328547425, 5.98152321]
+      forward_arrays:  [y_hat, rec_error]
+      forward_devices: [cuda:1, cuda:1]
+model:
+  name: vqVAE
+  type: models.vqVAE_more
+  log_wandb_images: True
+  #compiled: True
+  n_channels: 1
+  n_classes: 1
+  input_size: 64
+  num_hiddens: 128
+  num_residual_hiddens: 32
+  num_residual_layers: 2
+  embedding_dim: 64
+  num_embeddings: 512
+  commitment_cost: 0.25
+  decay: 0.99
+  loss: 
+    name: vqVAE_loss
+  evaluate_metrics:
+    validation:
+      - name: torch_dice
+  checkpoint_path: /data/example/checkpoints/
+  log_path: /data/example/logs/
+  activation: leakyrelu
+  last_activation: sigmoid
+  optimizer: Adam
+  optimizer_parameters:
+    lr: 0.0001
+training:
+  args:
+    replace_sampler_ddp: False # This feature has been changed lately by pytorch-lightning, so it may not work depending on the version of pytorch-lightning
+    max_epochs: 200
+    precision: 32
+    accumulate_grad_batches: 2
+    num_sanity_val_steps: 2
+    accelerator: gpu
+    devices: 1
+  callbacks:
+    early_stopping:
+      monitor: Train/loss
+      strict: True
+      min_delta: 1.e-3
+      patience: 40
+      verbose: False
+      mode: min
+      log_rank_zero_only: True
+  #checkpoint: "/path/to/checkpoint" # or 'last' to pick the last checkpoint or keep it commented to start training from scratch
+test_and_predict:
+  args:
+    max_epochs: -1
+    accelerator: gpu
+    devices: 1
+  checkpoint: last
