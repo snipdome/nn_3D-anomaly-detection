@@ -33,7 +33,7 @@ The scripts accept many optional arguments and one mandatory argument, which is 
 ```
 python train.py --config_file path/to/config/file
 ```
-As could be seen from the scripts, the content of the configuration file is divided into sections, each one with a specific purpose. Most of the times, the content of (each section of) the configuration file is directly supplied to a module (e.g. a network model, the pytorch-lightning Trainer, the logger, etc.), which prevents the user to write (to-be-kept-updated) boilerplate code. 
+As could be seen from the scripts, the content of the configuration file is divided into sections, each one with a specific purpose. Examples of configuration files are provided in the "examples" folder. Most of the times, the content of (each section of) the configuration file is directly supplied to a module (e.g. a network model, the pytorch-lightning Trainer, the logger, etc.), which prevents the user to write (and to-be-kept-updated) boilerplate code. 
 
 
 ## Implementation details
@@ -57,6 +57,10 @@ The architecture is "scalable" as it is possible to add new convolutional blocks
 
 ### Data loaders and data augmentation
 The framework uses the torchio library for data loading and data augmentation. The framework is designed to be easily extensible, and to allow the user to add new data augmentation techniques. The provided dataloader is designed to read in each folder contained in the training/validation dataset a stack of 2D tif files that are the slices of a 3D volume (associated to one subject/sample). You may want to declare a new dataloader based on the exemplary one provided.
+
+### Supplementary (incomplete) features
+Some of the provided network models supported [deepspeed](https://github.com/microsoft/DeepSpeed) for a while, but the support got lost after pl-lightning latest changes. I used the deepspeed library for having big networks (and optimisers, optimiser states, gradients) split among GPUs. This functionality should be restored soon.
+
 
 ### Bug and issues
 If you find any bug or issue, please open an issue on the github page of the project. I will try to address it as soon as possible, but I cannot guarantee any time frame. Any contribution (i.e. pull request) is (very) welcome.
