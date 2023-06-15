@@ -9,7 +9,7 @@ The framework has several network architectures already implemented, but it is e
 
 If you use this framework and you have liked using it, please star it :star2: and cite the following paper :page_facing_up: for reference, as it the basic framework of the research work presented in:
 
-D. Iuso, S. Chatterjee, S. Cornelissen, D. Verhees, J. De Beenhouwer, J. Sijbers. "Voxel-wise classification for porosity investigation of additive manufactured parts with 3D unsupervised and (deeply) supervised neural networks" ( https://doi.org/10.48550/arXiv.2305.07894 )
+D. Iuso, S. Chatterjee, S. Cornelissen, D. Verhees, J. De Beenhouwer, J. Sijbers. "Voxel-wise classification for porosity investigation of additive manufactured parts with 3D unsupervised and (deeply) supervised neural networks" ( for the moment, you can use this temporary DOI https://doi.org/10.48550/arXiv.2305.07894 )
 
 ## Requirements
 - pytorch
