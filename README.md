@@ -47,10 +47,12 @@ As the original implementation of all the implemented networks were 2D, we direc
 - UNet++
 - UNet 3+
 - MSS-UNet
+- ACC-Unet
 - VAE
 - ceVAE
 - gmVAE
 - vqVAE
+- RV-VAE
 
 The architecture is "scalable" as it is possible to add new convolutional blocks, usually by changing only one parameter on network initialisation (or by changing/adding a parameter in the configuration file).
 
