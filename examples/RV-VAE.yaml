@@ -10,29 +10,30 @@ dataloader:
   name: VolumetricDataLoader
   file_format: tif
   is_distributed: False
-  num_workers: 8
-  patch_size: 64 # or a 3-tuple for non-isotropic patches
+  num_workers: 16
+  patch_size: 64
+  aggregate_patches: True
   training:
-    batch_size: 2 
-    patches_per_volume: 2        # number of patches sampled per volume/subject
-    queue_length: 2              # how many patches of subjects to keep in memory at a time. The number of total patches is defined by patches_per_volume multiplied by the number of subjects in the dataset
-    sampling: sampling_likelihood # or 'uniform' for uniform sampling, 'label' for using the the 'label' volumes as sampling likelihood, 'sampling_likelihood' for using the sampling likelihood
+    batch_size: 100
+    patches_per_volume: 4000
+    queue_length: 4000
+    sampling: uniform
     data_augm_v: 4
     dataset:
       path:                /data/example/trainset/image
       label:               /data/example/trainset/label
       sampling_likelihood: /data/example/trainset/sampling_likelihood # can be removed if 'uniform' or 'label' sampling is used
   validation:
-    batch_size: 2
-    patches_per_volume: 2
-    queue_length: 2
-    sampling: sampling_likelihood
+    batch_size: 100
+    patches_per_volume: 1000
+    queue_length: 1000
+    sampling: uniform
     dataset:
       path:                /data/example/valset/image
       label:               /data/example/valset/label
       sampling_likelihood: /data/example/valset/sampling_likelihood 
   test_and_predict:
-    batch_size: 2
+    batch_size: 100
     patch_overlap: 32
     dataset:
       path:    /data/example/test/image
@@ -53,38 +54,49 @@ dataloader:
       forward_arrays:  [y_hat, rec_error]
       forward_devices: [cuda:1, cuda:1]
 model:
-  name: vqVAE-example
-  type: models.vqVAE_more
+  name: RV_VAE-example
+  type: models.RV_VAE
   log_wandb_images: True
-  #compiled: True
+  compiled: False
   n_channels: 1
   n_classes: 1
   input_size: 64
-  num_hiddens: 128
-  num_residual_hiddens: 32
-  num_residual_layers: 2
-  embedding_dim: 64
-  num_embeddings: 512
-  commitment_cost: 0.25
-  decay: 0.99
+  kernel_size: 3
+  channel_depths: [32, 64, 128, 256, 1024]
+  padding: 1
+  dropout:   [null,null,null,null,null] # [0.05, 0.05, 0.05, null, null] #[null, null, null, null, null, null, null]
+  batch_norm: null #[null, null, null, null, null, null, null]
+  insta_norm: null #[True, null, null, null, null, null, null]
   loss: 
-    name: vqVAE_loss
+    name: RV_VAE_loss
+    parameters:
+      kl_weight: 1.e-5
+      var_weight: 50
   evaluate_metrics:
     validation:
-      - name: torch_dice
+    - name: rv_torch_dice_loss
+    test:
+      #- name: torch_dice
+      name: pore_segmentation_curves
+      parameters:
+          #bins: 100
+          device: 'cuda:1'
+          slices: [70,1000,70,1000,100,900]
+          pred_mask: False
   checkpoint_path: /data/example/checkpoints/
   log_path: /data/example/logs/
-  activation: leakyrelu
-  last_activation: sigmoid
+  activation: relu
+  last_activation: sigmoid #sigmoid
   optimizer: Adam
   optimizer_parameters:
     lr: 0.0001
 training:
   args:
-    replace_sampler_ddp: False # This feature has been changed lately by pytorch-lightning, so it may not work depending on the version of pytorch-lightning
-    max_epochs: 200
+    #replace_sampler_ddp: False
+    max_epochs: 300
     precision: 32
-    accumulate_grad_batches: 2
+    detect_anomaly: False
+    accumulate_grad_batches: 4
     num_sanity_val_steps: 2
     accelerator: gpu
     devices: 1
@@ -97,7 +109,7 @@ training:
       verbose: False
       mode: min
       log_rank_zero_only: True
-  #checkpoint: "/path/to/checkpoint" # or 'last' to pick the last checkpoint or keep it commented to start training from scratch
+  #checkpoint: last
 test_and_predict:
   args:
     max_epochs: -1

@@ -53,7 +53,7 @@ dataloader:
       forward_arrays:  [y_hat, rec_error]
       forward_devices: [cuda:1, cuda:1]
 model:
-  name: ceVAE
+  name: ceVAE-example
   type: models.ceVAE
   log_wandb_images: True
   compiled: False

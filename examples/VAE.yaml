@@ -40,18 +40,20 @@ dataloader:
       results: /data/example/test/predictions
   test: # can be deleted if no post-processing is used
     post_processing:
-      - module: imagetools.basic_operations # imagetools is a fictitious module that is in the PYTHONPATH, which contain a function called complement_to_one_API in the submodule basic_operations
-        fun: complement_to_one_API
-        forward_arrays: y_hat # arrays in the test_step() or predict_step() of the model that will be passed to the function for post-processing
-  predict: # can be deleted if no post-processing is used
+      module: nn.utils.utils
+      fun: suppress_borders_and_outside_with_optimization_torch_hook
+      pars: [ 2.4328547425, 5.98152321]
+      forward_arrays:  [y_hat, rec_error]
+      forward_devices: [cuda:1, cuda:1]
+  predict:
     post_processing:
-      - module: imagetools.pore_segmentation
-        fun: pore_segmentation
-        forward_arrays: y_hat
-        threshold: otsu # optional arguments to forward to the function
-        is_background_zero_centered: True # optional arguments to forward to the function
+      module: nn.utils.utils
+      fun: suppress_borders_and_outside_with_optimization_torch_hook
+      pars: [ 2.4328547425, 5.98152321]
+      forward_arrays:  [y_hat, rec_error]
+      forward_devices: [cuda:1, cuda:1]
 model:
-  name: VAE
+  name: VAE-example
   type: models.VAE
   log_wandb_images: True
   compiled: False
