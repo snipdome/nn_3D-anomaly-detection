@@ -1,6 +1,6 @@
 # 
 # This file is part of the nn_3D-anomaly-detection distribution (https://github.com/snipdome/nn_3D-anomaly-detection).
-# Copyright (c) 2022-2023 imec-Vision Lab, University of Antwerp.
+# Copyright (c) 2022-2023 imec-Vision Lab, University of Antwerp
 # 
 # This program is free software: you can redistribute it and/or modify  
 # it under the terms of the GNU General Public License as published by  
@@ -13,6 +13,28 @@
 #
 # You should have received a copy of the GNU General Public License 
 # along with this program. If not, see <http://www.gnu.org/licenses/>.
+#
+# This file incorporates work covered originally by the "RV-VAE" package
+# (https://github.com/VassilisCN/RV-VAE), which is licensed as follows:
+#
+# 	Licensed under the Apache License, Version 2.0 (the "License");
+# 	you may not use this file except in compliance with the License.
+# 	You may obtain a copy of the License at
+#
+#    	http://www.apache.org/licenses/LICENSE-2.0
+#
+# 	Unless required by applicable law or agreed to in writing, software
+# 	distributed under the License is distributed on an "AS IS" BASIS,
+# 	WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or  implied.
+# 	See the License for the specific language governing permissions and
+# 	limitations under the License.
+# ============================================================================
+#
+# The original content has been modified:
+#
+# 05 Feb 2024 - imec-Vision Lab, University of Antwerp: Added support for 3D data, add GPL3 license
+
+
 
 import os, pathlib, gc, time, numpy as np, nibabel as nib, matplotlib.pyplot as plt, PIL.Image as Image
 
@@ -26,113 +48,114 @@ from utils.extern import *
 from nn.models.helpers import common_operations as common
 from models.helpers.ce import *
 from models.helpers.custom_layers import *
+import models.helpers.rv_modules as rv
 
-class UNetConvBlock(pl.LightningModule):
-	def __init__(self, in_size, out_size, padding, batch_norm, activation,dropout=None,stride=1):
-		super(UNetConvBlock, self).__init__()
-		block = []
-		block.append(nn.Conv3d(in_size, out_size, stride=stride, kernel_size=3, padding=padding, padding_mode='replicate'))
-		if activation.casefold() == 'prelu':
-			#nn.init.kaiming_normal_(block[-1].weight)
-			block.append(nn.PReLU())
-		elif activation.casefold() == 'leakyrelu':
-			nn.init.kaiming_normal_(block[-1].weight)
-			block.append(nn.LeakyReLU(0.01))
-		elif activation.casefold() == 'sigmoid':
-			#nn.init.xavier_uniform_(block[-1].weight) # works well for sigmoid
-			block.append(nn.Sigmoid())
-		if batch_norm:
-			block.append(nn.BatchNorm3d(out_size))
+# https://arxiv.org/pdf/2109.06540.pdf (VAE)
+# https://openaccess.thecvf.com/content/ICCV2023W/VIPriors/papers/Nicodemou_RV-VAE_Integrating_Random_Variable_Algebra_into_Variational_Autoencoders_ICCVW_2023_paper.pdf (RV-VAE)
 
-		block.append(nn.Conv3d(out_size, out_size, stride=stride, kernel_size=3, padding=padding, padding_mode='replicate'))
-		if activation.casefold() == 'prelu':
-			#nn.init.kaiming_normal_(block[-1].weight)
-			block.append(nn.PReLU())
-		elif activation.casefold() == 'leakyrelu':
-			nn.init.kaiming_normal_(block[-1].weight)
-			block.append(nn.LeakyReLU(0.01))
-		elif activation.casefold() == 'sigmoid':
-			#nn.init.xavier_uniform_(block[-1].weight) # works well for sigmoid
-			block.append(nn.Sigmoid())
-		if batch_norm:
-			block.append(nn.BatchNorm3d(out_size))
-		if dropout is not None:
-			block.append(nn.Dropout3d(p=dropout))
+def add_activation_and_init_layer(activation, layers, with_rv=False):
+	mod = rv if with_rv else nn
+	if   activation == 'relu':
+		nn.init.kaiming_normal_(layers[-1].weight, nonlinearity='relu')
+		layers.append(mod.ReLU())
+	elif activation == 'leakyrelu':
+		nn.init.kaiming_normal_(layers[-1].weight, nonlinearity='leaky_relu')
+		layers.append(nn.LeakyReLU()) if not with_rv else exec('raise Exception("The requested activation has not been implemented")')
+	elif activation == 'prelu':
+		nn.init.kaiming_normal_(layers[-1].weight, nonlinearity='leaky_relu')
+		layers.append(nn.PReLU()) if not with_rv else exec('raise Exception("The requested activation has not been implemented")')
+	elif activation == 'sigmoid':
+		nn.init.xavier_normal_(layers[-1].weight)
+		layers.append(mod.Sigmoid())
+	
+def add_utility_layers(layers, batch_norm, insta_norm, dropout, dims, out_size, with_rv=False):
+	mod = rv if with_rv else nn
+	if batch_norm:
+		layers.append(mod.BatchNorm3d(out_size)) if dims == 3 else layers.append(mod.BatchNorm2d(out_size))
+	if insta_norm:
+		if not with_rv:
+			layers.append(nn.InstanceNorm3d(out_size)) if dims == 3 else layers.append(nn.InstanceNorm2d(out_size))
+		else:
+			raise Exception('The requested insta_norm has not been implemented')
+	if dropout:
+		if not with_rv:
+			layers.append(nn.Dropout3d(p=dropout)) if dims == 3 else layers.append(nn.Dropout2d(p=dropout))
+		else:
+			raise Exception('The requested dropout has not been implemented')
 
-		self.block = nn.Sequential(*block)
+class ConvDownBlock(pl.LightningModule):
+	def __init__(self, in_size, out_size, down_mode='avg', activation='Relu', bias=True, insta_norm=None, stride=1, batch_norm=None, padding=1, dropout=None, scale_factor=2, is_single_conv=False, flat_latent=True, kernel_size=3, padding_mode='replicate', dims=3, with_rv=False, **kwargs):
+		assert with_rv==False, 'RV not implemented for ConvDownBlock'
+		super(ConvDownBlock, self).__init__()
+		
+		self.down = nn.Sequential()
+		if dims == 2:
+			self.down.append(nn.Conv2d(in_size, out_size, kernel_size=kernel_size, padding=padding, padding_mode=padding_mode, stride=stride, bias=bias))
+		else:
+			self.down.append(nn.Conv3d(in_size, out_size, kernel_size=kernel_size, padding=padding, padding_mode=padding_mode, stride=stride, bias=bias))
+
+		add_activation_and_init_layer(activation, self.down, with_rv=with_rv)
+		add_utility_layers(self.down, batch_norm, insta_norm, dropout, 3, out_size, with_rv=with_rv)	
+
+		if scale_factor != 1:
+			if down_mode in ('average','avg'):
+				self.down.append(nn.AvgPool3d(scale_factor)) if dims == 3 else self.down.append(nn.AvgPool2d(scale_factor))
+			elif 'max':
+				self.down.append(nn.MaxPool3d(scale_factor)) if dims == 3 else self.down.append(nn.MaxPool2d(scale_factor))
+			else:
+				raise Exception('The requested down_mode has not been implemented')
 
 	def forward(self, x):
-		out = self.block(x)
-		return out
+		return self.down(x)  
+	
+class ConvUpBlock(pl.LightningModule):
+	def __init__(self, in_size, out_size, up_mode='upconv', activation='Relu', batch_norm=None, insta_norm=None,  dropout=None, scale_factor=2, is_single_conv=False, bridge_size=None, flat_latent=True, kernel_size=3, bias=True, stride=1, padding=1, dims=3, with_rv=False, **kwargs):
+		super(ConvUpBlock, self).__init__()
+		mod = rv if with_rv else nn
 
-
-class UNetUpBlock(pl.LightningModule):
-	def __init__(self, in_size, out_size, up_mode, padding, batch_norm, activation, scale_factor=2, dropout=None):
-		super(UNetUpBlock, self).__init__()
+		self.up= nn.Sequential()
 		if up_mode == 'upconv':
-			self.up = nn.ConvTranspose3d(in_size, in_size, kernel_size=scale_factor,
-										 stride=scale_factor)
+			if dims == 2:
+				self.up.append(mod.ConvTranspose2d(in_size, out_size, kernel_size=kernel_size, stride=stride, bias=bias, padding=0))
+			else:
+				self.up.append(mod.ConvTranspose3d(in_size, out_size, kernel_size=kernel_size, stride=stride, bias=bias, padding=0))
 		elif up_mode == 'upsample':
-			#self.up = nn.Sequential(nn.Upsample(mode='trilinear', scale_factor=scale_factor, align_corners=False),
-			self.up = nn.Sequential(nn.Upsample(mode='nearest', scale_factor=scale_factor),
-									nn.Conv3d(in_size, in_size, kernel_size=1))
+			if dims == 2:
+				if not with_rv:
+					self.up.append(nn.Upsample(mode='bilinear', scale_factor=scale_factor, align_corners=False))
+					self.up.append(nn.Conv2d(in_size, out_size, kernel_size=1, padding=padding, bias=bias))
+				else:
+					raise Exception('The requested up_mode has not been implemented')
+			else:
+				if not with_rv:
+					self.up.append(nn.Upsample(mode='trilinear', scale_factor=scale_factor, align_corners=False))
+					self.up.append(nn.Conv3d(in_size, out_size, kernel_size=1, padding=padding, bias=bias))
+				else:
+					raise Exception('The requested up_mode has not been implemented')
+		else:
+			raise Exception('The requested up_mode has not been implemented')
+		
+		if dims == 2:
+			self.up.append(mod.Conv2d(out_size, out_size, kernel_size=3, stride=1, padding=1, bias=True, padding_mode='replicate'))
+		else:
+			self.up.append(mod.Conv3d(out_size, out_size, kernel_size=3, stride=1, padding=1, bias=True, padding_mode='replicate'))
 
-		self.conv_block = UNetConvBlock(in_size, out_size, padding=padding, batch_norm=batch_norm, activation=activation, dropout=dropout)
-
-	def center_crop(self, layer, target_size):
-		_, _, layer_depth, layer_height, layer_width = layer.size()
-		diff_z = (layer_depth - target_size[0]) // 2
-		diff_y = (layer_height - target_size[1]) // 2
-		diff_x = (layer_width - target_size[2]) // 2
-		return layer[:, :, diff_z:(diff_z + target_size[0]), diff_y:(diff_y + target_size[1]), diff_x:(diff_x + target_size[2])]
-		#  _, _, layer_height, layer_width = layer.size() #for 2D data
-		# diff_y = (layer_height - target_size[0]) // 2
-		# diff_x = (layer_width - target_size[1]) // 2 
-		# return layer[:, :, diff_y:(diff_y + target_size[0]), diff_x:(diff_x + target_size[1])]
+		add_activation_and_init_layer(activation, self.up, with_rv=with_rv)
+		add_utility_layers(self.up, batch_norm, insta_norm, dropout, 3, out_size, with_rv=with_rv)
 
 	def forward(self, x):
-		up = self.up(x)
-		out = self.conv_block(up)
-		return out
-
-def conv_block(in_channels, out_channels, kernel_size, padding, stride, activation='relu', bias=True):
-	block = nn.Sequential(
-		nn.Conv3d(in_channels, out_channels, kernel_size=kernel_size, padding=padding, stride=stride, bias=bias),
-	)
-	if activation.casefold() == 'prelu':
-		nn.init.kaiming_normal_(block[-1].weight)
-		block.append(nn.PReLU())
-	elif activation.casefold() == 'leakyrelu':
-		nn.init.kaiming_normal_(block[-1].weight)
-		block.append(nn.LeakyReLU(0.01))
-	elif activation.casefold() == 'sigmoid':
-		nn.init.xavier_uniform_(block[-1].weight) # works well for sigmoid
-		block.append(nn.Sigmoid())
-	return block
-
-def transp_conv_block(in_channels, out_channels, kernel_size, padding, stride, output_padding = 0, activation=nn.ReLU()):
-	block = nn.Sequential(
-		nn.ConvTranspose3d(in_channels, out_channels, kernel_size=kernel_size, padding=padding, stride=stride, output_padding=output_padding),
-	)
-	if activation.casefold() == 'prelu':
-		nn.init.kaiming_normal_(block[-1].weight)
-		block.append(nn.PReLU())
-	elif activation.casefold() == 'leakyrelu':
-		nn.init.kaiming_normal_(block[-1].weight)
-		block.append(nn.LeakyReLU(0.01))
-	elif activation.casefold() == 'sigmoid':
-		nn.init.xavier_uniform_(block[-1].weight) # works well for sigmoid
-		block.append(nn.Sigmoid())
-	return block
+		return self.up(x)
+	
 
 
-class gmVAE(pl.LightningModule):
+# Based on: Context-encoding Variational Autoencoder for Unsupervised Anomaly Detection
+class RV_VAE(pl.LightningModule):
 	def __init__(
-		self, name, checkpoint_path=None, log_path=None, n_channels=1, n_classes=1, depth=3, wf=6, padding=True, patch_size=64, z_dim=1024, flat_latent=True, scale_factor=2,
-		batch_norm=False, up_mode='upconv', activation='LeakyReLu', loss={'name': 'cross_entropy'}, channel_depths=None, dim_c=60, dim_z=500, dim_w=1,
-		evaluate_metrics={}, dropout=None, last_activation='', optimizer_parameters=None, optimizer = 'RMSprop', input_size=256,  **kwargs
+		self, name, checkpoint_path=None, log_path=None, n_channels=1, n_classes=1, depth=3, wf=6, padding=True, input_size=256, patch_size=64, channel_depths=1024, flat_latent=True,
+		batch_norm=None, insta_norm=None, up_mode='upsample', activation='LeakyReLu', loss={'name': 'cross_entropy'},  kernel_size=4,
+		evaluate_metrics={}, dropout=None, last_activation='sigmoid', optimizer_parameters=None, optimizer = 'RMSprop', **kwargs
 	):
-		super(gmVAE, self).__init__()
+		super(RV_VAE, self).__init__()
 		self.save_hyperparameters()
 		self.name = name
 		self.n_channels = n_channels
@@ -145,12 +168,12 @@ class gmVAE(pl.LightningModule):
 		self.last_activation = last_activation
 		self.input_size = input_size
 		self.optimizer = optimizer
-		self.scale_factor=scale_factor
 		self.optimizer_param = optimizer_parameters
 		self.loss = loss
 		self.eval_metrics = evaluate_metrics
+		self.kernel_size = kernel_size
 		self.log_wandb_images = kwargs.get('log_wandb_images', False)
-		
+			  
 		if not isinstance(input_size, list):
 			self.dims = 3
 		elif len(input_size) == 2:
@@ -160,133 +183,72 @@ class gmVAE(pl.LightningModule):
 		elif len(input_size) == 3:
 			assert (input_size[0]==input_size[1] and input_size[0]==input_size[2]), 'Wrong dimensions in input'
 			input_size = input_size[0]
-		'''
-		if activation == 'relu':
-			activation = nn.ReLU()
-		elif activation == 'leakyrelu':
-			activation = nn.LeakyReLU()
-		
-		if last_activation == 'relu':
-			last_activation = nn.ReLU()
-		elif last_activation == 'leakyrelu':
-			last_activation = nn.LeakyReLU()
-		elif last_activation == 'sigmoid':
-			last_activation = nn.Sigmoid()'''
-		
-		self.dim_c = dim_c #9 # n clusters
-		self.dim_z = dim_z #1
-		self.dim_w = dim_w #1
 
-	
-		'''self.conv_block1 = conv_block(in_channels = 1,  out_channels = 64, kernel_size = 3, padding = 1, stride = 2, activation=activation)
-		self.conv_block2 = conv_block(in_channels = 64, out_channels = 64, kernel_size = 3, padding = 1, stride = 1, activation=activation)
-		self.conv_block3 = conv_block(in_channels = 64, out_channels = 64, kernel_size = 3, padding = 1, stride = 1, activation=activation)
-		self.conv_block4 = conv_block(in_channels = 64, out_channels = 64, kernel_size = 3, padding = 1, stride = 2, activation=activation)
-		self.conv_block5 = conv_block(in_channels = 64, out_channels = 64, kernel_size = 3, padding = 1, stride = 1, activation=activation)
-		self.conv_block6 = conv_block(in_channels = 64, out_channels = 64, kernel_size = 3, padding = 1, stride = 1, activation=activation)'''
-
-
-		if not isinstance(input_size, list):
-			self.dims = 3
-		elif len(input_size) == 2:
-			self.dims = 2
-			assert (input_size[0]==input_size[1]), 'Wrong dimensions in input'
-			input_size = input_size[0]
-		elif len(input_size) == 3:
-			assert (input_size[0]==input_size[1] and input_size[0]==input_size[2]), 'Wrong dimensions in input'
-			input_size = input_size[0]
-		
-		if channel_depths is None:
-			channel_depths = [2**(i+wf) for i in range(depth)]
-			
-		dropouts = dropout if isinstance(dropout, list) else [dropout for i in range(len(channel_depths))]
-		batch_norms = batch_norm if isinstance(batch_norm, list) else [batch_norm for i in range(len(channel_depths))]
-		
-		self.down_path = nn.ModuleList()
-		for i,end_channels in enumerate(channel_depths):
-			if i != 0:
-				self.down_path.append(UNetConvBlock(channel_depths[i-1], end_channels,
-												padding=padding, batch_norm=batch_norms[i], activation=activation, 
-												dropout=dropouts[i], stride=1))
-			else:
-				self.down_path.append(UNetConvBlock(n_channels, end_channels,
-												padding=padding, batch_norm=batch_norms[i], activation=activation, 
-												dropout=dropouts[i], stride=1))
-
-		c = channel_depths[-1] # bottleneck channel
-
-		self.w_mu_layer        = nn.Conv3d(c, self.dim_w, kernel_size = 1, padding = 0, stride = 1, bias=False) #
-		self.w_log_sigma_layer = nn.Conv3d(c, self.dim_w, kernel_size = 1, padding = 0, stride = 1, bias=False) #
-		
-		self.z_mu_layer        = nn.Conv3d(c, self.dim_z, kernel_size = 1, padding = 0, stride = 1, bias=False)
-		self.z_log_sigma_layer = nn.Conv3d(c, self.dim_z, kernel_size = 1, padding = 0, stride = 1, bias=False)
-		
-		self.conv_block7 = conv_block(in_channels = self.dim_w, out_channels = c, kernel_size = 1, padding = 0, stride = 1, activation=activation)
-		self.z_wc_mu_layer        = nn.Conv3d(c, self.dim_z * self.dim_c, kernel_size = 1, padding = 0, stride = 1, bias=False) #
-		self.z_wc_log_sigma_layer = nn.Conv3d(c, self.dim_z * self.dim_c, kernel_size = 1, padding = 0, stride = 1, bias=False) #
-		
-		self.conv_block8 = conv_block(in_channels = self.dim_z, out_channels = c, kernel_size = 1, padding = 0, stride = 1, activation=activation)
-		self.up_path = nn.ModuleList()
-		for i,end_channels in enumerate(reversed(channel_depths[:-1])):
-			self.up_path.append(UNetUpBlock(channel_depths[-1-i], end_channels, up_mode=up_mode, 
-											padding=padding, batch_norm=batch_norms[i], activation=activation, 
-											dropout=dropouts[i],scale_factor=scale_factor))
-
-		self.xz_mu_layer = conv_block(in_channels = channel_depths[0], out_channels=n_classes, kernel_size = 3, padding = 1, stride = 1, activation=last_activation)
-
-
-	def forward(self, image, sample=True): #FIXME: sample
-		outputs = {}
-		
-		x=image
-		for i, down in enumerate(self.down_path):
-			x = down(x)
-			if i != len(self.down_path)-1:
-				x = F.avg_pool3d(x, self.scale_factor)        
-		
-		outputs['z_mu'] = z_mu = self.z_mu_layer(x)
-		outputs['z_log_sigma'] = z_log_sigma = self.z_log_sigma_layer(x)
-		# reparametrization
-		if sample:
-			rand_z = torch.randn(z_log_sigma.shape, device=self.device) * torch.exp(0.5 * z_log_sigma)
+		#ch = [16, 64, 256, 1024] + [z_dim]
+		if not isinstance(channel_depths, list):
+			ch = [16, 64, 128, 256] + [channel_depths]
+			self.z_dim = channel_depths
 		else:
-			rand_z =z_mu
-		outputs['z_sampled'] = z_sampled = z_mu + rand_z
-
-		outputs['w_mu']        = w_mu = self.w_mu_layer(x)
-		outputs['w_log_sigma'] = w_log_sigma = self.w_log_sigma_layer(x)
-		rand_w = torch.randn(w_log_sigma.shape, device=self.device) * torch.exp(0.5 * w_log_sigma)
-		outputs['w_sampled'] = w_sampled = w_mu + rand_w
-
-		# posterior p(z|w,c)
-		x7 = self.conv_block7(w_sampled)
-		z_wc_mu = self.z_wc_mu_layer(x7)
-		z_wc_log_sigma = self.z_wc_log_sigma_layer(x7)
-		bias = torch.full_like(z_wc_log_sigma, 0.1)
-		z_wc_log_sigma_inv = z_wc_log_sigma + bias
-		outputs['z_wc_mus'] = z_wc_mus = z_wc_mu.view(-1, self.dim_c, self.dim_z, *z_wc_mu.shape[2:])
-		outputs['z_wc_log_sigma_invs'] = z_wc_log_sigma_invs = z_wc_log_sigma_inv.view(-1, self.dim_c, self.dim_z, *z_wc_log_sigma_inv.shape[2:])
-		rand_z_wc = torch.randn(z_wc_log_sigma_invs.shape, device=self.device) * torch.exp(z_wc_log_sigma_invs)
-		outputs['z_wc_sampled'] = z_wc_sampled = z_wc_mus + rand_z_wc
+			ch = channel_depths
+			self.z_dim = ch[-1]
 		
-		# decoder p(x|z)
-		y = self.conv_block8(z_sampled)
-		for i, up in enumerate(self.up_path):
-			y = up(y) 
-		outputs['xz_mu'] = xz_mu = self.xz_mu_layer(y)
-
-		# prior p(c)
-		z_sample_shape = [1 for x in z_wc_mus.shape]
-		z_sample_shape[1] = self.dim_c
-		z_sample = z_sampled.unsqueeze(dim = 1).repeat(z_sample_shape)
-		loglh = -0.5 * (((z_sample - z_wc_mus) ** 2) * torch.exp(z_wc_log_sigma_invs)) - z_wc_log_sigma_invs + torch.log(torch.tensor(np.pi))
-		loglh_sum = torch.sum(loglh, dim = 2)
-		outputs['pc_logit'] = pc_logit = loglh_sum
-		outputs['pc'] = pc = nn.Softmax(dim = 1)(loglh_sum)
+		dropout_list = dropout if isinstance(dropout, list) else [dropout for i in range(len(channel_depths))]
+		insta_norm_list = insta_norm if isinstance(insta_norm, list) else [insta_norm for i in range(len(channel_depths))]
 		
-		return outputs
-	
-	
+		latent_kernel_size = input_size//(2**(len(channel_depths)-1))
+
+		const_params = {'stride': 2, 'scale_factor': 1, 'kernel_size': kernel_size, 'activation': activation, 'padding': 1}
+		self.enc = nn.Sequential()
+		for l_idx in range(len(channel_depths)):
+			const_params['dropout']=dropout_list[l_idx]
+			const_params['insta_norm']=insta_norm_list[l_idx]
+			if l_idx == 0:
+				self.enc.append(ConvDownBlock(in_size=n_channels, out_size=ch[0], **const_params))
+			elif l_idx != len(channel_depths)-1:
+				self.enc.append(ConvDownBlock(in_size=ch[l_idx-1],  out_size=ch[l_idx], **const_params))
+			else: #last layer
+				latent_params = {'stride': 1, 'scale_factor': 1, 'kernel_size': latent_kernel_size, 'bias':False,  'activation': activation, 'padding': 0}
+				self.enc.append(ConvDownBlock(in_size=ch[-2],     out_size=ch[-1], **latent_params))
+
+			 
+		latent_params['padding']=1 ####
+		const_params['kernel_size']=2
+		const_params['stride']=2
+		const_params['insta_norm']=None
+		const_params['dropout']=None
+		self.dec = nn.Sequential()
+		for l_idx in reversed(range(len(channel_depths))):
+			#const_params['dropout']=dropout_list[l_idx]
+			#const_params['insta_norm']=insta_norm_list[l_idx]dec_c_mult
+			if l_idx == len(channel_depths)-1: #inner-most layer
+				self.dec.append(ConvUpBlock(in_size=ch[-1]//2,  out_size=ch[-2], **latent_params, with_rv=True))
+			elif l_idx != 0:
+				self.dec.append(ConvUpBlock(in_size=ch[l_idx], out_size=ch[l_idx-1], **const_params, with_rv=True))
+			else: #last layer
+				const_params['activation']=last_activation
+				self.dec.append(ConvUpBlock(in_size=ch[0],     out_size=n_classes, **const_params, with_rv=True))
+		pass
+
+	def forward(self, inpt, ret_encoded=True):        
+		#y1 = self.enc(inpt)
+		for layer in self.enc:
+			inpt = layer(inpt)
+		y1 = inpt
+		mu, log_var = torch.chunk(y1, 2, dim=1)
+		var = torch.exp(log_var)
+		z = torch.cat((mu.unsqueeze(1), var.unsqueeze(1)), dim=1)
+		#x_rec = self.dec(z)
+		tmp = z
+		for layer in self.dec:
+			tmp = layer(tmp)
+		x_rec = tmp
+
+		if ret_encoded:
+			return x_rec, mu, log_var
+		else:
+			return x_rec
+
+
 	def training_step(self, batch, batch_nb):
 		x = batch["img"]["data"]
 		shape = list(x.shape)
@@ -296,9 +258,10 @@ class gmVAE(pl.LightningModule):
 		except ValueError:
 			pass
 		x = x.view(*shape)
-		output = self.forward(x)
-		y_hat = output.pop('xz_mu')
-		losses = self.compute_loss(x,y_hat, **output)
+		
+		y_vae_hat, mean, log_var = self.forward(x, ret_encoded=True)
+		losses = self.compute_loss(x,y_vae_hat, mean=mean, log_var=log_var)
+		
 		real_batch_size = x.shape[0]*torch.distributed.get_world_size() if torch.distributed.group.WORLD is not None else x.shape[0]
 		loss = losses.pop('loss')
 		self.log('Train/'+self.loss['name'], loss, on_step=False, on_epoch=True, prog_bar=False, sync_dist=True,batch_size=real_batch_size)
@@ -307,9 +270,9 @@ class gmVAE(pl.LightningModule):
 			self.log('Train/'+name,  value, on_step=False, on_epoch=True, prog_bar=False, sync_dist=True,batch_size=real_batch_size)
 		if self.log_wandb_images and batch_nb == 0 and self.current_epoch!=0:
 			wutils.log_wandb_image(self.loggers[0], 'Train-sample/input', x)
-			wutils.log_wandb_image(self.loggers[0], 'Train-sample/output', y_hat)
+			wutils.log_wandb_image(self.loggers[0], 'Train-sample/vae-output', y_vae_hat[:,0,...])
 		return loss
-		
+
 	def validation_step(self, batch, batch_nb):
 		x = batch["img"]["data"] 
 		shape = list(x.shape)
@@ -319,10 +282,10 @@ class gmVAE(pl.LightningModule):
 		except ValueError:
 			pass
 		x = x.view(*shape)
-  
-		output = self.forward(x, sample=False)
-		y_hat = output.pop('xz_mu')
-		losses = self.compute_loss(x,y_hat, **output)
+		
+		# VAE feedback
+		y_vae_hat, mean, log_var = self.forward(x, ret_encoded=True)
+		losses = self.compute_loss(x,y_vae_hat, mean=mean, log_var=log_var)
 		loss = losses.pop('loss')
 		real_batch_size = x.shape[0]*torch.distributed.get_world_size(torch.distributed.group.WORLD) if torch.distributed.group.WORLD is not None else x.shape[0]
 		self.log('Valid/'+self.loss['name'],  loss, on_step=False, on_epoch=True, prog_bar=False, sync_dist=True,batch_size=real_batch_size)
@@ -331,10 +294,11 @@ class gmVAE(pl.LightningModule):
 			self.log('Valid/val-'+name,  value, on_step=False, on_epoch=True, prog_bar=False, sync_dist=True,batch_size=real_batch_size)
 		if self.log_wandb_images and batch_nb == 0 and self.current_epoch!=0:
 			wutils.log_wandb_image(self.loggers[0], 'Valid-sample/input',  x)
-			wutils.log_wandb_image(self.loggers[0], 'Valid-sample/output', y_hat)
-		evaluated_metrics = self.compute_additional_metrics(x,y_hat, 'validation')   
-		for name in evaluated_metrics:
-			self.log('Valid/'+name, evaluated_metrics[name], on_step=False, on_epoch=True, prog_bar=False, sync_dist=True,batch_size=real_batch_size)
+			wutils.log_wandb_image(self.loggers[0], 'Valid-sample/output', y_vae_hat[:,0,...])
+		evaluated_metrics = self.compute_additional_metrics(x,y_vae_hat, 'validation')        
+		for loss_name, value in evaluated_metrics.items():
+			val = value if not isinstance(value, dict) else value['loss']
+			self.log('Valid/'+loss_name, val, on_step=False, on_epoch=True, prog_bar=False, sync_dist=True,batch_size=real_batch_size)
 		return loss
 	
 	def validation_end(self, outputs):
@@ -354,16 +318,12 @@ class gmVAE(pl.LightningModule):
 			pass
 		x = x.view(*shape)
 		y = y.view(*shape)
-		output = self.forward(x,sample=False)
-		y_hat = output.pop('xz_mu')
-  
-		if not torch.isfinite(y_hat).all():
-			print("x is not finite")
-   
+		y_hat = self.forward(x, ret_encoded=False)[:,0,...].clone()
+		
 		# If patch-based (grid), then put together the batched samples
 		if self.data_module.must_aggregate_patches():
 			if not hasattr(self, 'grid_sampler'): # FIXME : Careful, grid_sampler varies for each subject!
-				self.set_test_grid_sampler(self.data_module.grid_sampler)
+				self.set_test_grid_sampler(self.data_module.grid_sampler)  
 			x     = x.view(*origin_shape)
 			y     = y.view(*origin_shape)
 			y_hat = y_hat.view(*origin_shape)
@@ -372,7 +332,9 @@ class gmVAE(pl.LightningModule):
 			self.output_aggregator.add_batch(layered_batch, locations)
 		#else calculate directly the losses
 		else:
-			y_hat = abs(y_hat-x)
+			processed = self.hook_ex_external_code('test', 'post_processing', x=x, y_hat=y_hat)
+			y_hat = processed['y_hat']
+			y_hat = torch.abs(y_hat-x)
 			batch_metrics = []
 			batch_metrics_to_write = dict()
 			for sample_idx in range(x.shape[0]):
@@ -380,7 +342,7 @@ class gmVAE(pl.LightningModule):
 				for name, value in batch_metrics[-1].items():
 					batch_metrics_to_write['Test-step/'+name] = value
 				self.loggers[0].log_metrics(batch_metrics_to_write)
-			# outputs =  batch_metrics
+			return batch_metrics # pytorch-lightning < 2.0.0
 
 	def predict_step(self, batch, batch_nb):
 		x = batch["img"]["data"]
@@ -391,9 +353,8 @@ class gmVAE(pl.LightningModule):
 			shape.pop(2+index)
 		except ValueError:
 			pass
-		x = x.view(*shape)  
-		output = self.forward(x)
-		y_hat = output['xz_mu']
+		x = x.view(*shape)
+		y_hat = self.forward(x, ret_encoded=False)[:,0,...].clone()
 
 		# If patch-based (grid), then put together the batched samples
 		if self.data_module.must_aggregate_patches():
@@ -429,8 +390,6 @@ class gmVAE(pl.LightningModule):
 				img.header.get_xyzt_units()
 				img.to_filename(os.path.join(output_dir, 'rec_error', names[subj] + '.nii.gz'))             
 				#print('Saved in '+os.path.join(output_dir, 'infer.nii.gz'))
-			
-		return 0
 
 	def on_test_epoch_end(self):
 		if self.data_module.must_aggregate_patches(): 
@@ -469,10 +428,9 @@ class gmVAE(pl.LightningModule):
 				data.append([metrics[name] for name in metrics])
 			self.loggers[0].log_table(key='Test/scores_table', columns=columns, data=data)
 		else:
-			#outputs should be a concatenation of all the outputs of the test_step. loss due to pytorch lightning update
 			grouped_values = dict()
 			n_samples = 0
-			for batch_metrics in outputs:
+			for batch_metrics in outputs: # since pytorch-lightning 2.0.0, outputs should be a member of self https://github.com/Lightning-AI/pytorch-lightning/pull/16520
 				for metrics in batch_metrics:
 					n_samples+=1
 					for name in metrics: 
@@ -514,8 +472,6 @@ class gmVAE(pl.LightningModule):
 	def configure_optimizers(self):
 		if self.optimizer.casefold() == 'adam':
 			return torch.optim.Adam(self.parameters(), **self.optimizer_param)
-		if self.optimizer.casefold() == 'adamw':
-			return torch.optim.AdamW(self.parameters(), **self.optimizer_param)
 		elif self.optimizer.casefold() == 'deepspeedcpuadam':
 			return DeepSpeedCPUAdam(self.parameters(), **self.optimizer_param)
 		elif self.optimizer.casefold() == 'fusedadam':
@@ -535,7 +491,7 @@ class gmVAE(pl.LightningModule):
 			torch.save(self.state_dict(), os.path.join(self.log_path, self.name+".pt"))
 		else:
 			raise Exception("Cannot save model if log_path has not been defined.")
-	
+
 	def compute_additional_metrics(self, y, y_hat, stage, **additional_inputs):
 		values = {}
 		metrics = self.eval_metrics.get(stage,{})

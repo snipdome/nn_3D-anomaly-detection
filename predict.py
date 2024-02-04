@@ -1,21 +1,4 @@
 #!/usr/bin/env python
-# 
-# This file is part of the nn_3D-anomaly-detection distribution (https://github.com/snipdome/nn_3D-anomaly-detection).
-# Copyright (c) 2022-2023 imec-Vision Lab, University of Antwerp.
-# 
-# This program is free software: you can redistribute it and/or modify  
-# it under the terms of the GNU General Public License as published by  
-# the Free Software Foundation, version 3.
-#
-# This program is distributed in the hope that it will be useful, but 
-# WITHOUT ANY WARRANTY; without even the implied warranty of 
-# MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the GNU 
-# General Public License for more details.
-#
-# You should have received a copy of the GNU General Public License 
-# along with this program. If not, see <http://www.gnu.org/licenses/>.
-
-
 import os, json, yaml, glob
 from utils import no_torch_utils
 from argparse import ArgumentParser
@@ -46,11 +29,9 @@ if __name__ == '__main__':
 import numpy as np
 import torch
 import torch.nn as nn
-from pytorch_lightning import Trainer, loggers, seed_everything
-from pytorch_lightning.utilities.seed import reset_seed
+from pytorch_lightning import Trainer, loggers
 from pytorch_lightning.callbacks import ModelCheckpoint, EarlyStopping
 from pytorch_lightning.callbacks import ModelSummary
-from pytorch_lightning.plugins import DDPPlugin
 import models 
 import dataloaders
 from matplotlib import pyplot as plt

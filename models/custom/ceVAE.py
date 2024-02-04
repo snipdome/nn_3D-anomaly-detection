@@ -14,7 +14,6 @@
 # You should have received a copy of the GNU General Public License 
 # along with this program. If not, see <http://www.gnu.org/licenses/>.
 
-
 import os, pathlib, gc, time, numpy as np, nibabel as nib, matplotlib.pyplot as plt, PIL.Image as Image
 
 import torch, torch.nn as nn, torch.nn.functional as F, torch.distributions as dist
@@ -24,7 +23,7 @@ from deepspeed.ops.adam import DeepSpeedCPUAdam, FusedAdam
 from utils.stats import *
 import utils.wandb as wutils
 from utils.extern import *
-from ..helpers import common_operations as common
+from nn.models.helpers import common_operations as common
 from models.helpers.ce import *
 from models.helpers.custom_layers import *
 
@@ -340,7 +339,6 @@ class ceVAE(pl.LightningModule):
 			locations = batch[tio.LOCATION]
 			layered_batch = torch.cat((x, y, y_hat), dim=1)
 			self.output_aggregator.add_batch(layered_batch, locations)
-			return 0
 		#else calculate directly the losses
 		else:
 			processed = self.hook_ex_external_code('test', 'post_processing', x=x, y_hat=y_hat)
@@ -353,7 +351,7 @@ class ceVAE(pl.LightningModule):
 				for name, value in batch_metrics[-1].items():
 					batch_metrics_to_write['Test-step/'+name] = value
 				self.loggers[0].log_metrics(batch_metrics_to_write)
-			return batch_metrics
+			#outputs = batch_metrics
 
 	def predict_step(self, batch, batch_nb):
 		x = batch["img"]["data"]
@@ -401,10 +399,8 @@ class ceVAE(pl.LightningModule):
 				img.header.get_xyzt_units()
 				img.to_filename(os.path.join(output_dir, 'rec_error', names[subj] + '.nii.gz'))             
 				#print('Saved in '+os.path.join(output_dir, 'infer.nii.gz'))
-			
-		return 0
 
-	def test_epoch_end(self, outputs):
+	def on_test_epoch_end(self):
 		if self.data_module.must_aggregate_patches(): 
 			output_tensor = self.output_aggregator.get_output_tensor()
 			x = output_tensor[0,:,:,:]
@@ -441,6 +437,7 @@ class ceVAE(pl.LightningModule):
 				data.append([metrics[name] for name in metrics])
 			self.loggers[0].log_table(key='Test/scores_table', columns=columns, data=data)
 		else:
+			#outputs should be a concatenation of all the outputs of the test_step. loss due to pytorch lightning update
 			grouped_values = dict()
 			n_samples = 0
 			for batch_metrics in outputs:
@@ -458,7 +455,7 @@ class ceVAE(pl.LightningModule):
 					data.append([metrics[name] for name in metrics])
 			self.loggers[0].log_table(key='Test/scores_table', columns=columns, data=data)
 		
-	def on_predict_epoch_end(self, outputs):
+	def on_predict_epoch_end(self):
 		if self.data_module.must_aggregate_patches():
 			output_tensor = self.output_aggregator.get_output_tensor()
 			x = output_tensor[0,:,:,:]

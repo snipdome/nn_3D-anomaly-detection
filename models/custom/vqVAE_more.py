@@ -47,7 +47,9 @@ from utils.stats import *
 import utils.wandb as wutils
 from utils.extern import *
 from nn.models.helpers import common_operations as common
-from nn.models.helpers.aes import Encoder, Decoder
+from nn.models.helpers.aes import Encoder_more, Decoder_more
+
+# This vqVAE uses more encoder and decoder stages in order to reduce the image size more
 
 class VectorQuantizerEMA(nn.Module):
 	def __init__(self, num_embeddings, embedding_dim, commitment_cost, decay, epsilon=1e-5):
@@ -118,14 +120,14 @@ class VectorQuantizerEMA(nn.Module):
 		#return loss, quantized.permute(0, 3, 1, 2).contiguous(), perplexity, encodings
 		return loss, quantized.permute(0, 4, 1, 2, 3).contiguous(), perplexity, encodings
 
-class vqVAE(pl.LightningModule):
+class vqVAE_more(pl.LightningModule):
 
 	def __init__(self, num_hiddens, num_residual_layers, num_residual_hiddens, 
 				num_embeddings, embedding_dim, commitment_cost, name, decay=0,
 				checkpoint_path=None, log_path=None, n_channels=1, n_classes=1, 
 				input_size=256, patch_size=64, channel_depths=1024, loss={'name': 'cross_entropy'}, 
 				evaluate_metrics={}, dropout=None, last_activation='sigmoid', optimizer_parameters=None, optimizer = 'RMSprop', **kwargs):
-		super(vqVAE, self).__init__()
+		super(vqVAE_more, self).__init__()
 		self.save_hyperparameters()
 		self.name = name
 		self.n_channels = n_channels
@@ -140,7 +142,7 @@ class vqVAE(pl.LightningModule):
 		self.eval_metrics = evaluate_metrics
 		self.log_wandb_images = kwargs.get('log_wandb_images', False)
 
-		self._encoder = Encoder(n_channels, num_hiddens,
+		self._encoder = Encoder_more(n_channels, num_hiddens,
 								num_residual_layers, 
 								num_residual_hiddens)
 		self._pre_vq_conv = nn.Conv3d(in_channels=num_hiddens, 
@@ -149,7 +151,7 @@ class vqVAE(pl.LightningModule):
 									  stride=1)
 		self._vq_vae = VectorQuantizerEMA(num_embeddings, embedding_dim, 
 											commitment_cost, decay)
-		self._decoder = Decoder(embedding_dim,
+		self._decoder = Decoder_more(embedding_dim,
 								num_hiddens, 
 								num_residual_layers, 
 								num_residual_hiddens,
@@ -239,7 +241,6 @@ class vqVAE(pl.LightningModule):
 			locations = batch[tio.LOCATION]
 			layered_batch = torch.cat((x, y, y_hat), dim=1)
 			self.output_aggregator.add_batch(layered_batch, locations)
-			return 0
 		#else calculate directly the losses
 		else:
 			processed = self.hook_ex_external_code('test', 'post_processing', x=x, y_hat=y_hat)
@@ -252,7 +253,7 @@ class vqVAE(pl.LightningModule):
 				for name, value in batch_metrics[-1].items():
 					batch_metrics_to_write['Test-step/'+name] = value
 				self.loggers[0].log_metrics(batch_metrics_to_write)
-			return batch_metrics
+			#outputs = batch_metrics
 
 	def predict_step(self, batch, batch_nb):
 		x = batch["img"]["data"]
@@ -300,8 +301,10 @@ class vqVAE(pl.LightningModule):
 				img.header.get_xyzt_units()
 				img.to_filename(os.path.join(output_dir, 'rec_error', names[subj] + '.nii.gz'))             
 				#print('Saved in '+os.path.join(output_dir, 'infer.nii.gz'))
+			
+		return 0
 
-	def test_epoch_end(self, outputs):
+	def on_test_epoch_end(self):
 		if self.data_module.must_aggregate_patches(): 
 			output_tensor = self.output_aggregator.get_output_tensor()
 			x = output_tensor[0,:,:,:]
@@ -338,6 +341,7 @@ class vqVAE(pl.LightningModule):
 				data.append([metrics[name] for name in metrics])
 			self.loggers[0].log_table(key='Test/scores_table', columns=columns, data=data)
 		else:
+			#outputs should be a concatenation of all the outputs of the test_step. loss due to pytorch lightning update
 			grouped_values = dict()
 			n_samples = 0
 			for batch_metrics in outputs:
@@ -355,7 +359,7 @@ class vqVAE(pl.LightningModule):
 					data.append([metrics[name] for name in metrics])
 			self.loggers[0].log_table(key='Test/scores_table', columns=columns, data=data)
 		
-	def on_predict_epoch_end(self):
+	def on_predict_epoch_end(self, outputs):
 		if self.data_module.must_aggregate_patches():
 			print('Saving..')
 			output_tensor = self.output_aggregator.get_output_tensor()

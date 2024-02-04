@@ -19,8 +19,11 @@ from .Unet import Unet
 from .MSS_Unet import MSS_Unet
 from .Unet_plusplus import Unet_plusplus
 from .Unet_3plus import Unet_3plus
+from .ACC_Unet import ACC_Unet
 
 from .custom.VAE import VAE
 from .custom.ceVAE import ceVAE
 from .custom.gmVAE import gmVAE
+from .custom.RV_VAE import RV_VAE
 from .custom.vqVAE import vqVAE
+from .custom.vqVAE_more import vqVAE_more

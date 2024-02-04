@@ -14,7 +14,6 @@
 # You should have received a copy of the GNU General Public License 
 # along with this program. If not, see <http://www.gnu.org/licenses/>.
 
-
 import os, pathlib, gc, time, numpy as np, nibabel as nib
 import torch, torch.nn as nn, torch.nn.functional as F
 import torchio as tio
@@ -27,7 +26,7 @@ from PIL import Image
 from utils.stats import *
 import utils.wandb as wutils
 from utils.extern import *
-from .helpers import common_operations as common
+from nn.models.helpers import common_operations as common
 from deepspeed.ops.adam import DeepSpeedCPUAdam, FusedAdam
 
 class Unet_3plus(pl.LightningModule):
@@ -203,7 +202,6 @@ class Unet_3plus(pl.LightningModule):
         locations = batch[tio.LOCATION]
         layered_batch = torch.cat((y, y_hat[-1], x), dim=1)
         self.output_aggregator.add_batch(layered_batch, locations)
-        return 0
 
     def predict_step(self, batch, batch_nb):
         x = batch["img"]["data"]
@@ -213,14 +211,13 @@ class Unet_3plus(pl.LightningModule):
             self.set_test_grid_sampler(self.data_module.grid_sampler)
         locations = batch[tio.LOCATION]
         self.output_aggregator.add_batch(y_hat[-1], locations)
-        return 0
     
     def validation_end(self, outputs):
         avg_loss = torch.stack([x['val_loss'] for x in outputs]).mean()
         tensorboard_logs = {'val_loss': avg_loss}
         return {'avg_val_loss': avg_loss, 'log': tensorboard_logs}
 
-    def test_epoch_end(self, outputs):
+    def on_test_epoch_end(self):
         output_tensor = self.output_aggregator.get_output_tensor()
         y     = output_tensor[0,:,:,:]
         y_hat = output_tensor[1,:,:,:] # is on RAM
@@ -242,7 +239,7 @@ class Unet_3plus(pl.LightningModule):
         for name in metrics:
             self.log('Test/'+name, metrics[name]) 
 
-    def on_predict_epoch_end(self, outputs):
+    def on_predict_epoch_end(self):
         output_tensor = self.output_aggregator.get_output_tensor()
         y_hat = output_tensor[0,:,:,:]
         del output_tensor
