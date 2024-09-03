@@ -11,6 +11,8 @@ If you use this framework and you have liked using it, please star it :star2: an
 
 D. Iuso, S. Chatterjee, S. Cornelissen, D. Verhees, J. De Beenhouwer, J. Sijbers. "Voxel-wise classification for porosity investigation of additive manufactured parts with 3D unsupervised and (deeply) supervised neural networks" ( for the moment, you can use this temporary DOI https://doi.org/10.48550/arXiv.2305.07894 )
 
+The repository provided here belongs to the University of Antwerp and imec-Visionlab.
+
 ## Requirements
 - pytorch
 - Pytorch Lightning
